@@ -77,3 +77,4 @@ temp*.txt
 *.csv
 
 *.sqlite*
+db_data/

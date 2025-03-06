@@ -1,7 +1,16 @@
 [project]
 name = "events-graph-rag"
-version = "0.1.0"
+version = "0.0.1"
 description = "Search events in the graph database using hybrid RAG"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "langchain-neo4j",
+    "neo4j",
+    "langchain",
+    "langchain_openai",
+    "langchain-community",
+    "python-dotenv",
+]
+[project.optional-dependencies]
+dev = ["ruff", "ipykernel"]
