@@ -1,0 +1,79 @@
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.env/
+.venv/
+env/
+venv/
+
+# Dependency files
+pip-log.txt
+pip-delete-this-directory.txt
+*.egg-info/
+.eggs/
+
+# Python build artifacts
+build/
+dist/
+*.egg
+*.whl
+*.manifest
+*.spec
+
+# UV (Astral) specific
+**/uv_state/          # Caches UV session state
+**/.uv_codebase.json  # UV codebase index file
+**/.uv/               # UV cache and temporary files
+
+# VS Code/Editor Config
+.vscode/
+.cursor/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Coverage and testing
+.coverage
+*.cover
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+pytest_cache/
+tests/__pycache__/
+*.pytest_cache
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Documentation
+docs/_build/
+*.rst~
+temp*.txt
+
+# Linux
+.*.swp
+.*.swo
+
+# Env vars
+.env
+*.db
+*.db.lock
+
+# Documents
+# *.md
+*.txt
+*.pdf
+*.docx
+*.doc
+*.csv
+
+*.sqlite*
