@@ -11,6 +11,9 @@ dependencies = [
     "langchain_openai",
     "langchain-community",
     "python-dotenv",
+    "langchain_mistralai",
+    "langchain_groq",
+    "langchain_anthropic",
 ]
 [project.optional-dependencies]
 dev = ["ruff", "ipykernel"]

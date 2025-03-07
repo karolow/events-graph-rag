@@ -1,11 +1,18 @@
+import logging
 import os
 
 import dotenv
+from langchain_community.vectorstores import Neo4jVector
 from langchain_neo4j import Neo4jGraph
+from langchain_openai import OpenAIEmbeddings
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 dotenv.load_dotenv(".env", override=True)
 
-# Neo4j connection parameters
 url = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 username = os.environ.get("NEO4J_USERNAME", "")
 password = os.environ.get("NEO4J_PASSWORD", "")
@@ -66,5 +73,129 @@ FOREACH (tag IN CASE WHEN row.tags <> '' AND row.tags <> '-' THEN split(row.tags
 """
 
 graph.query(q_load_events)
+
+
+# Create index for vector search
+def create_vector_index():
+    try:
+        # Try to create the vector index directly
+        # If it already exists, this will fail with a specific error message
+        create_index_query = """
+        CALL db.index.vector.createNodeIndex(
+          'events_vector_index',
+          'Event',
+          'embedding',
+          1536,
+          'cosine'
+        )
+        """
+        graph.query(create_index_query)
+        logger.info("Created vector index for Event nodes")
+    except Exception as e:
+        # Check if the error is because the index already exists
+        if "already exists" in str(e):
+            logger.info("Vector index already exists")
+        else:
+            # Try an alternative approach for older Neo4j versions
+            try:
+                # Check if we can list indexes using SHOW INDEXES
+                check_index_query = """
+                SHOW INDEXES
+                WHERE name = 'events_vector_index'
+                YIELD name
+                RETURN count(*) > 0 AS exists
+                """
+                result = graph.query(check_index_query)
+                if result and result[0].get("exists", False):
+                    logger.info(
+                        "Vector index already exists (verified with SHOW INDEXES)"
+                    )
+                else:
+                    # Try to create the index with a different syntax for older Neo4j versions
+                    alt_create_index_query = """
+                    CALL db.createNodeVectorIndex(
+                      'events_vector_index',
+                      'Event',
+                      'embedding',
+                      1536,
+                      'cosine'
+                    )
+                    """
+                    try:
+                        graph.query(alt_create_index_query)
+                        logger.info(
+                            "Created vector index for Event nodes (using alternative method)"
+                        )
+                    except Exception as inner_e:
+                        logger.error(f"Failed to create vector index: {inner_e}")
+                        logger.warning(
+                            "Proceeding without vector index. You may need to create it manually."
+                        )
+            except Exception as check_e:
+                logger.error(f"Failed to check for existing index: {check_e}")
+                logger.warning(
+                    "Proceeding without vector index. You may need to create it manually."
+                )
+
+
+# Create the combined text property for events to include project and location
+def create_combined_text_property():
+    create_combined_property_query = """
+    MATCH (e:Event)
+    OPTIONAL MATCH (e)-[:PART_OF]->(p:Project)
+    OPTIONAL MATCH (e)-[:TAKES_PLACE_IN]->(l:Location)
+    WITH e, 
+         e.name AS event_name,
+         COALESCE(p.name, "") AS project_name,
+         COALESCE(l.name, "") AS location_name
+    SET e.combined_text = event_name + 
+                         CASE WHEN project_name <> "" THEN "\n" + project_name ELSE "" END +
+                         CASE WHEN location_name <> "" THEN "\nLocation: " + location_name ELSE "" END
+    RETURN count(e) as updated_count
+    """
+    update_result = graph.query(create_combined_property_query)
+    logger.info(
+        f"Updated {update_result[0]['updated_count']} events with combined text for embeddings"
+    )
+
+
+# Generate and store embeddings for all events
+def generate_embeddings():
+    # Initialize vector embeddings
+    embeddings = OpenAIEmbeddings()
+
+    # Create vector index for Events data using the combined text field
+    vector_index = Neo4jVector.from_existing_graph(
+        embeddings,
+        url=url,
+        username=username,
+        password=password,
+        index_name="events_vector_index",
+        node_label="Event",
+        text_node_properties=["combined_text"],
+        embedding_node_property="embedding",
+        retrieval_query="""
+        WITH node, score
+        MATCH (e:Event) WHERE e = node
+        RETURN e.combined_text AS text,
+               elementId(e) AS id,
+               {event_id: e.id, name: e.name} AS metadata,
+               score
+        """,
+    )
+    logger.info("Generated embeddings for all events")
+    return vector_index
+
 graph.refresh_schema()
-print(graph.get_schema)
+logger.info("Neo4j Graph Schema loaded")
+
+logger.info("Creating vector index...")
+create_vector_index()
+
+logger.info("Creating combined text property...")
+create_combined_text_property()
+
+logger.info("Generating embeddings...")
+generate_embeddings()
+
+logger.info("Data loading and embedding generation complete!")
