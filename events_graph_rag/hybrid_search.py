@@ -1,19 +1,20 @@
 # %%
 import logging
 import os
-from typing import Any
+import re
+from typing import Any, List
 
 import dotenv
-from langchain_anthropic import ChatAnthropic
 from langchain_community.vectorstores import Neo4jVector
 from langchain_core.callbacks import CallbackManagerForChainRun
+from langchain_core.documents import Document
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.prompts import BasePromptTemplate, PromptTemplate
 from langchain_core.retrievers import BaseRetriever
-from langchain_groq import ChatGroq
 from langchain_mistralai import ChatMistralAI
 from langchain_neo4j import GraphCypherQAChain, Neo4jGraph
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
+from scipy.spatial.distance import cosine
 
 # Configure logging
 logging.basicConfig(
@@ -49,7 +50,7 @@ try:
         password=password,
         index_name="events_vector_index",
         node_label="Event",
-        text_node_properties=["combined_text"],
+        text_node_property="combined_text",
         embedding_node_property="embedding",
         retrieval_query="""
         WITH node, score
@@ -72,7 +73,7 @@ except Exception as e:
         password=password,
         index_name="events",
         node_label="Event",
-        text_node_properties=["combined_text"],
+        text_node_property="combined_text",
         embedding_node_property="embedding",
         retrieval_query="""
         WITH node, score
@@ -91,27 +92,46 @@ llm = ChatMistralAI(temperature=0, model_name="mistral-large-latest")
 
 # Create a custom prompt template for the Cypher generation
 cypher_generation_template = """
-You are an expert in generating Cypher queries for Neo4j.
+You are an expert Neo4j Cypher query generator for a cultural events database.
 
-Neo4j Graph Schema:
+Schema of the database:
 {schema}
 
 The user has asked the following question:
 {query}
 
-Based on semantic search, these events might be relevant:
-{relevant_docs}
-
 Generate a Cypher query to answer the user's question.
+
+IMPORTANT - SEMANTIC MAPPINGS:
+When users search for certain terms, expand your search to include related concepts:
+- "art event" → search for categories like: art, exhibition, gallery, museum, visual arts, painting, sculpture
+- "music event" → search for categories like: music, concert, recital, performance, orchestra, band, choir
+- "theater event" → search for categories like: theater, drama, play, performance, stage, acting
+- "workshop" → search for categories like: workshop, class, seminar, training, education
+- "festival" → search for categories like: festival, celebration, fair, carnival
+- "conference" → search for categories like: conference, symposium, convention, meeting, summit
+
+IMPORTANT - DATE HANDLING:
+When working with dates:
+1. The database stores dates in ISO format: 'YYYY-MM-DD' in the start_date and end_date fields
+2. Times are stored separately in start_time and end_time fields in 'HH:MM' format
+3. There's also a start_date_year_month field in format 'YYYY-MM' for easier month-based filtering
+4. User queries might use various formats like 'MM/DD/YYYY', 'DD/MM/YYYY', or natural language
+5. For date matching, use the following approach:
+   - For exact date queries like "9/24/2021", convert to ISO format: WHERE e.start_date = '2021-09-24'
+   - For month queries like "September 2021", use: WHERE e.start_date_year_month = '2021-09'
+   - For time-specific queries, use the time field: WHERE e.start_time = '19:00'
+   - For date ranges, use comparison operators: WHERE e.start_date >= '2021-09-01' AND e.start_date <= '2021-09-30'
+
 Important guidelines:
 1. If you're counting entities that could appear multiple times, use COUNT(DISTINCT entity) to avoid duplicate counting.
-2. Always use case-insensitive comparison with TOLOWER() function.
+2. Always use case-insensitive comparison with toLower() function (not TOLOWER).
 3. For keyword searches, be comprehensive by:
    - Using multiple CONTAINS clauses to catch word variations
    - Combining them with OR operators
-   - Example: WHERE (TOLOWER(e.name) CONTAINS 'workshop' OR TOLOWER(e.name) CONTAINS 'workshops')
+   - Example: WHERE (toLower(c.name) CONTAINS 'art' OR toLower(c.name) CONTAINS 'exhibition' OR toLower(c.name) CONTAINS 'gallery')
 4. When appropriate, use regular expressions for more flexible matching:
-   - Example: WHERE e.name =~ '(?i).*workshop.*'
+   - Example: WHERE e.name =~ '(?i).*(art|exhibition|gallery).*'
 5. IMPORTANT: Events have these relationships:
    - (Event)-[:HAS_TOPIC]->(Tag)
    - (Event)-[:BELONGS_TO]->(Category)
@@ -119,25 +139,104 @@ Important guidelines:
    - (Event)-[:PART_OF]->(Project)
    - (Coordinator)-[:COORDINATES]->(Event)
    - (Guest)-[:PARTICIPATES_IN]->(Event)
-6. When handling participant exclusions:
-   - Use NOT EXISTS subqueries to ensure excluded participants are not present
-   - Example for excluding a participant:
-     WHERE NOT EXISTS {{ MATCH (e)<-[:PARTICIPATES_IN]-(g2:Guest) WHERE TOLOWER(g2.name) = 'monika malcherek' }}
-7. For participant inclusion/exclusion patterns:
-   - Use separate MATCH clauses for required participants
-   - Use WHERE NOT EXISTS for exclusions
+6. When handling participant exclusions, use NOT EXISTS pattern.
+7. Always use proper Neo4j syntax and avoid syntax errors.
+8. For COUNT queries (when the user asks "how many"), just return the count without collecting IDs:
+   - Use: RETURN COUNT(DISTINCT e) AS eventCount
+   - This is more efficient for large result sets
 
-Remember to always use case-insensitive comparison with TOLOWER() function for all text comparisons.
+Here are examples of well-formed Cypher queries:
 
-Take into account the semantically relevant events listed above.
-If the question mentions specific topics or concepts, expand your search to include variations and related terms.
+Example 1: Find all music events with more than 50 participants
+```cypher
+MATCH (e:Event)-[:BELONGS_TO]->(c:Category)
+WHERE (toLower(c.name) CONTAINS 'music' OR toLower(c.name) CONTAINS 'concert' OR toLower(c.name) CONTAINS 'performance') 
+  AND e.number_of_participants > 50
+RETURN e.name AS eventName, e.id AS eventId, e.number_of_participants AS participants
+ORDER BY e.number_of_participants DESC
+```
+
+Example 2: Find events coordinated by John Smith
+```cypher
+MATCH (c:Coordinator)-[:COORDINATES]->(e:Event)
+WHERE toLower(c.name) = 'john smith'
+RETURN e.name AS eventName, e.id AS eventId, c.name AS coordinator
+```
+
+Example 3: Find art events with multiple coordinators
+```cypher
+MATCH (c:Coordinator)-[:COORDINATES]->(e:Event)-[:BELONGS_TO]->(cat:Category)
+WHERE toLower(cat.name) CONTAINS 'art' OR toLower(cat.name) CONTAINS 'exhibition' OR toLower(cat.name) CONTAINS 'gallery'
+WITH e, COUNT(DISTINCT c) AS coordinatorCount
+WHERE coordinatorCount > 1
+RETURN e.name AS eventName, e.id AS eventId, coordinatorCount
+ORDER BY coordinatorCount DESC
+```
+
+Example 4: Find events where Alice participated but Bob did not
+```cypher
+MATCH (p1:Person {{name: 'Alice'}})-[:PARTICIPATED_IN]->(e:Event)
+WHERE NOT EXISTS {{
+  MATCH (p2:Person {{name: 'Bob'}})-[:PARTICIPATED_IN]->(e)
+}}
+RETURN e.name AS eventName, e.id AS eventId
+```
+
+Example 5: Count the best coordinator for an art event with many participants
+```cypher
+MATCH (c:Coordinator)-[:COORDINATES]->(e:Event)-[:BELONGS_TO]->(cat:Category)
+WHERE (toLower(cat.name) CONTAINS 'art' OR toLower(cat.name) CONTAINS 'exhibition' OR toLower(cat.name) CONTAINS 'gallery' OR toLower(cat.name) CONTAINS 'museum')
+  AND e.number_of_participants > 100
+WITH c, COUNT(DISTINCT e) AS eventCount, SUM(e.number_of_participants) AS totalParticipants
+RETURN c.name AS coordinator, eventCount, totalParticipants
+ORDER BY eventCount DESC, totalParticipants DESC
+LIMIT 5
+```
+
+Example 6: Count events on a specific date (9/24/2021)
+```cypher
+MATCH (e:Event)
+WHERE e.start_date = '2021-09-24'
+RETURN COUNT(e) AS eventCount
+```
+
+Example 7: Count events in a specific month (September 2021)
+```cypher
+MATCH (e:Event)
+WHERE e.start_date_year_month = '2021-09'
+RETURN COUNT(e) AS eventCount
+```
+
+Example 8: Count evening events (starting at or after 6 PM)
+```cypher
+MATCH (e:Event)
+WHERE e.start_time >= '18:00'
+RETURN COUNT(e) AS eventCount
+```
+
+Example 9: Count events by month in 2021
+```cypher
+MATCH (e:Event)
+WHERE e.start_date STARTS WITH '2021-'
+WITH substring(e.start_date, 0, 7) AS month, COUNT(e) AS eventCount
+RETURN month, eventCount
+ORDER BY month
+```
+
+IMPORTANT: Format your response as follows:
+1. First provide a brief explanation of your approach
+2. Then provide ONLY the Cypher query enclosed in triple backticks like:
+```cypher
+YOUR QUERY HERE
+```
+3. Do not include any explanatory text within the triple backticks
 
 Cypher Query:
 """
 
 cypher_prompt = PromptTemplate(
     template=cypher_generation_template,
-    input_variables=["schema", "query", "relevant_docs"],
+    input_variables=["schema", "query"],
 )
 
 
@@ -262,36 +361,566 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
 
         return chain
 
+    def _get_events_from_graph_results(self, results: List[dict]) -> List[str]:
+        """Extract event IDs from graph search results."""
+        event_ids = []
+
+        # Check if this is a COUNT query result (only contains count values)
+        is_count_query = (
+            all(
+                key.lower().endswith("count")
+                for result in results
+                for key in result.keys()
+                if not key.lower().startswith("event")
+            )
+            if results
+            else False
+        )
+
+        # If this is a count query, return empty list as we don't need event IDs for count queries
+        if is_count_query and results:
+            logger.info(
+                "Detected COUNT query result. Skipping event ID extraction for count-only query."
+            )
+            return event_ids
+
+        for result in results:
+            # Check for direct event_id or eventId in the result
+            if "event_id" in result:
+                event_ids.append(str(result["event_id"]))
+                continue
+
+            # Check for eventId (camelCase) which is what the Cypher query returns
+            if "eventId" in result:
+                event_ids.append(str(result["eventId"]))
+                continue
+
+            # Check if the result contains an Event node with id property
+            if "e" in result:
+                event_node = result["e"]
+                # Use getattr for objects, get for dictionaries
+                if hasattr(event_node, "__dict__"):  # It's an object
+                    event_id = getattr(event_node, "id", None)
+                    if event_id is not None:
+                        event_ids.append(str(event_id))
+                elif isinstance(event_node, dict) and "id" in event_node:
+                    event_ids.append(str(event_node["id"]))
+                continue
+
+            # Check for event node with different key
+            if "event" in result:
+                event_node = result["event"]
+                if hasattr(event_node, "__dict__"):  # It's an object
+                    event_id = getattr(event_node, "id", None)
+                    if event_id is not None:
+                        event_ids.append(str(event_id))
+                elif isinstance(event_node, dict) and "id" in event_node:
+                    event_ids.append(str(event_node["id"]))
+                continue
+
+            # Check for any key that might contain an event node
+            for key, value in result.items():
+                if isinstance(value, dict) and "id" in value:
+                    event_ids.append(str(value["id"]))
+                    break
+                elif hasattr(value, "__dict__"):  # It's an object
+                    event_id = getattr(value, "id", None)
+                    if event_id is not None:
+                        event_ids.append(str(event_id))
+                        break
+
+        # Remove duplicates and ensure all IDs are strings
+        return list(set(event_ids))
+
+    def _filter_vector_results_by_events(
+        self, vector_docs: List[Document], event_ids: List[str]
+    ) -> List[Document]:
+        """Filter vector search results to only include events from the graph search."""
+        filtered_docs = []
+
+        # Ensure all event_ids are strings for consistent comparison
+        event_ids_set = set(str(event_id) for event_id in event_ids)
+
+        for doc in vector_docs:
+            # Check if the document has metadata
+            if not hasattr(doc, "metadata") or not doc.metadata:
+                continue
+
+            # Try different possible keys for event ID in metadata
+            event_id = None
+            for key in ["event_id", "id", "eventId", "event"]:
+                if key in doc.metadata:
+                    event_id = str(doc.metadata[key])
+                    break
+
+            # If we found an event ID and it's in our set, include this document
+            if event_id and event_id in event_ids_set:
+                filtered_docs.append(doc)
+
+        return filtered_docs
+
     def _call(
         self,
         inputs: dict[str, Any],
         run_manager: CallbackManagerForChainRun | None = None,
     ) -> dict[str, Any]:
-        # First retrieve relevant documents using vector search
+        # First perform graph search
         query = inputs["query"]
-        relevant_docs = self.vector_retriever.invoke(query)
-        logger.info(f"Relevant events retrieved: {len(relevant_docs)}")
 
-        # Extract event names from content
-        relevant_events = [
-            self.document_processor.extract_title_from_content(doc.page_content)
-            for doc in relevant_docs
-        ]
-        logger.info(f"Extracted event names: {relevant_events}")
+        # Get a filtered version of the schema with only essential information
+        schema = self._get_filtered_schema()
 
-        # Format documents for the prompt
-        formatted_docs = self.document_processor.format_docs_for_prompt(relevant_docs)
-
-        # Add the retrieved events to the context
-        enhanced_inputs = {
+        # Prepare inputs for graph search
+        graph_inputs = {
             "query": query,
-            "relevant_events": relevant_events,
-            "relevant_docs": formatted_docs,
-            "schema": self.graph.get_schema,
+            "schema": schema,
         }
 
-        # Call the parent class method with enhanced inputs
-        return super()._call(enhanced_inputs, run_manager)
+        # Generate and execute Cypher query
+        llm_response = self.cypher_generation_chain.invoke(graph_inputs)
+        logger.info(f"LLM response: {llm_response}")
+
+        # Extract the actual Cypher query from the LLM's response
+        cypher_query = self._extract_cypher_query(llm_response)
+        logger.info(f"Extracted Cypher query: {cypher_query}")
+
+        # Execute the Cypher query
+        graph_results = self.graph.query(cypher_query)
+        logger.info(f"Graph search returned {len(graph_results)} results")
+
+        # Extract event IDs from graph results
+        event_ids = self._get_events_from_graph_results(graph_results)
+        logger.info(f"Extracted {len(event_ids)} event IDs from graph results")
+
+        # Extract event names for logging
+        event_names = self._extract_event_names_from_graph_results(graph_results)
+        logger.info(f"Events from graph search: {event_names}")
+
+        # Check if this is a COUNT query
+        is_count_query = (
+            "COUNT" in cypher_query.upper()
+            and all(
+                key.lower().endswith("count")
+                for result in graph_results
+                for key in result.keys()
+                if not key.lower().startswith("event")
+            )
+            if graph_results
+            else False
+        )
+
+        # Filter graph results to only include essential attributes
+        filtered_results = self._filter_results_attributes(graph_results)
+
+        # Initialize vector results as empty
+        vector_results_text = []
+
+        # For COUNT queries, we don't do targeted vector search
+        # Instead, we'll rely solely on the graph results
+        if is_count_query:
+            logger.info(
+                "COUNT query detected. Skipping vector search as this is a count-only query."
+            )
+        # Only perform vector search if we have graph results with event IDs
+        elif event_ids:
+            # Perform targeted vector search only on the events found by graph search
+            vector_results_text = self._perform_targeted_vector_search(query, event_ids)
+            logger.info(
+                f"Performed vector search on {len(event_ids)} events from graph search"
+            )
+
+        # Call the QA chain with filtered results
+        qa_result = self.qa_chain.invoke(
+            {
+                "schema": schema,
+                "question": query,
+                "graph_results": filtered_results,
+                "vector_results": vector_results_text,
+            }
+        )
+
+        # Return the result as a dictionary
+        return {"result": qa_result}
+
+    def _extract_key_search_terms(self, query: str) -> str:
+        """Extract key search terms from the user query for more focused vector search.
+
+        This method identifies the most important semantic terms in the query,
+        filtering out structural language like "Find all" or "with more than",
+        and expands key terms with related concepts for better semantic matching.
+        """
+        # Common words to filter out
+        filter_words = {
+            "find",
+            "all",
+            "with",
+            "more",
+            "than",
+            "and",
+            "or",
+            "the",
+            "that",
+            "have",
+            "has",
+            "had",
+            "having",
+            "get",
+            "show",
+            "list",
+            "display",
+            "return",
+            "give",
+            "me",
+            "about",
+            "for",
+            "in",
+            "on",
+            "at",
+            "to",
+            "from",
+            "by",
+            "of",
+            "would",
+            "be",
+            "best",
+            "most",
+            "many",
+            "much",
+            "some",
+            "any",
+            "few",
+            "little",
+            "who",
+        }
+
+        # Semantic expansion mappings for key terms
+        semantic_expansions = {
+            # "art": [
+            #     "exhibition",
+            #     "gallery",
+            #     "museum",
+            #     "visual",
+            #     "painting",
+            #     "sculpture",
+            # ],
+            "exhibition": ["art", "gallery", "museum", "display", "showcase"],
+            "music": [
+                "concert",
+                "recital",
+                "performance",
+                "orchestra",
+                "band",
+                "choir",
+            ],
+            "theater": ["drama", "play", "stage", "acting", "performance"],
+            "workshop": ["class", "seminar", "training", "education"],
+            "festival": ["celebration", "fair", "carnival"],
+            "conference": ["symposium", "convention", "meeting", "summit"],
+        }
+
+        # Extract potential key terms by removing filter words and keeping phrases
+        # First, look for quoted phrases
+        import re
+
+        quoted_phrases = re.findall(r'"([^"]+)"', query)
+
+        # Remove quoted phrases from the query
+        for phrase in quoted_phrases:
+            query = query.replace(f'"{phrase}"', "")
+
+        # Split the remaining query into words and filter out common words
+        words = query.lower().split()
+        key_terms = [
+            word for word in words if word not in filter_words and len(word) > 2
+        ]
+
+        # Combine quoted phrases and key terms
+        all_terms = quoted_phrases + key_terms
+
+        # Expand key terms with related concepts
+        expanded_terms = set(all_terms)
+        for term in all_terms:
+            # Check if this term has semantic expansions
+            for key, expansions in semantic_expansions.items():
+                # If the term is in the expansions, add the key
+                if term in expansions:
+                    expanded_terms.add(key)
+                # If the term is a key, add all its expansions
+                elif term == key:
+                    expanded_terms.update(expansions)
+                # If the term contains a key or expansion, add related terms
+                else:
+                    for word in [key] + expansions:
+                        if word in term or term in word:
+                            expanded_terms.add(key)
+                            expanded_terms.update(expansions)
+                            break
+
+        # If we have no terms, fall back to the original query
+        if not expanded_terms:
+            logger.info(f"No key terms extracted, using original query: '{query}'")
+            return query
+
+        # Join the terms into a search query
+        search_terms = " ".join(expanded_terms)
+        logger.info(
+            f"Extracted and expanded search terms: '{search_terms}' from query: '{query}'"
+        )
+        return search_terms
+
+    def _perform_targeted_vector_search(
+        self, query: str, event_ids: List[str]
+    ) -> List[str]:
+        """Perform vector search only on specific events from graph search."""
+        # If no event IDs, return empty list
+        if not event_ids:
+            logger.warning("No event IDs provided for vector search")
+            return []
+
+        logger.info(f"Performing vector search on event IDs: {event_ids}")
+
+        # Extract key search terms for more focused vector search
+        search_query = self._extract_key_search_terms(query)
+        logger.info(f"Using search query for vector search: '{search_query}'")
+
+        # Create a Cypher query to get the combined_text for these specific events
+        event_ids_str = ", ".join([f"'{event_id}'" for event_id in event_ids])
+        cypher_query = f"""
+        MATCH (e:Event)
+        WHERE e.id IN [{event_ids_str}]
+        RETURN e.combined_text AS text, e.id AS event_id, e.name AS event_name
+        """
+
+        try:
+            # Execute the query to get the text content
+            results = self.graph.query(cypher_query)
+            logger.info(f"Retrieved {len(results)} event texts for vector search")
+
+            if not results:
+                logger.warning("No text content found for the specified events")
+                return []
+
+            # Extract the text content and keep track of which text belongs to which event
+            texts = []
+            event_info = []
+            for result in results:
+                if "text" in result and result["text"]:
+                    texts.append(result["text"])
+                    event_info.append(
+                        {
+                            "id": result.get("event_id", "unknown"),
+                            "name": result.get("event_name", "unknown"),
+                        }
+                    )
+                    logger.debug(
+                        f"Processing event: {result.get('event_name', 'unknown')} (ID: {result.get('event_id', 'unknown')})"
+                    )
+
+            if not texts:
+                logger.warning("No valid text content found for the specified events")
+                return []
+
+            # Get the embeddings directly from our embeddings object
+            # We know we're using OpenAIEmbeddings from the initialization
+            embeddings = OpenAIEmbeddings()
+
+            # Create embeddings for the search query (not the original query)
+            logger.info(f"Creating embedding for search query: '{search_query}'")
+            query_embedding = embeddings.embed_query(search_query)
+
+            # Create embeddings for the texts
+            logger.info(f"Creating embeddings for {len(texts)} event texts")
+            text_embeddings = embeddings.embed_documents(texts)
+
+            # Calculate similarity scores
+            similarities = []
+            for i, text_embedding in enumerate(text_embeddings):
+                similarity = 1 - cosine(query_embedding, text_embedding)
+                similarities.append((similarity, texts[i], event_info[i]))
+                logger.info(
+                    f"Event: {event_info[i]['name']} (ID: {event_info[i]['id']}) - Similarity score: {similarity:.4f}"
+                )
+
+            # Sort by similarity (highest first)
+            similarities.sort(reverse=True)
+            logger.info(
+                f"Top event match: {similarities[0][2]['name']} (ID: {similarities[0][2]['id']}) with score {similarities[0][0]:.4f}"
+            )
+
+            # Return the top 5 most similar texts
+            return [text for _, text, _ in similarities[:5]]
+
+        except Exception as e:
+            logger.error(f"Error performing targeted vector search: {e}")
+            return []
+
+    def _get_event_ids_from_vector_docs(self, vector_docs: List[Document]) -> List[str]:
+        """Extract event IDs from vector search documents."""
+        event_ids = []
+
+        for doc in vector_docs:
+            if hasattr(doc, "metadata") and doc.metadata:
+                for key in ["event_id", "id", "eventId", "event"]:
+                    if key in doc.metadata:
+                        event_ids.append(str(doc.metadata[key]))
+                        break
+
+        return list(set(event_ids))
+
+    def _get_vector_context_for_events(
+        self, vector_docs: List[Document], event_ids: List[str]
+    ) -> List[str]:
+        """Get vector search context for specific events."""
+        context = []
+        event_ids_set = set(str(event_id) for event_id in event_ids)
+
+        for doc in vector_docs:
+            if hasattr(doc, "metadata") and doc.metadata:
+                for key in ["event_id", "id", "eventId", "event"]:
+                    if key in doc.metadata and str(doc.metadata[key]) in event_ids_set:
+                        context.append(doc.page_content)
+                        break
+
+        return context
+
+    def _extract_event_names_from_graph_results(
+        self, graph_results: List[dict]
+    ) -> List[str]:
+        """Extract event names from graph results for logging."""
+        event_names = []
+
+        for result in graph_results:
+            name = None
+
+            # Try to find event name in different possible locations
+            if "e" in result and hasattr(result["e"], "name"):
+                name = result["e"].name
+            elif (
+                "e" in result
+                and isinstance(result["e"], dict)
+                and "name" in result["e"]
+            ):
+                name = result["e"]["name"]
+            elif "event" in result and hasattr(result["event"], "name"):
+                name = result["event"].name
+            elif (
+                "event" in result
+                and isinstance(result["event"], dict)
+                and "name" in result["event"]
+            ):
+                name = result["event"]["name"]
+
+            # If no name found but we have an eventId, use that
+            if not name and "eventId" in result:
+                name = f"Event ID: {result['eventId']}"
+
+            if name:
+                event_names.append(name)
+
+        return event_names
+
+    def _get_filtered_schema(self) -> str:
+        """Get a filtered version of the schema with only essential information."""
+        full_schema = self.graph.get_schema
+
+        # Extract only the node types, relationship types, and key properties
+        # Focus on the most relevant parts for our queries
+        filtered_schema = ""
+
+        # Extract node information for Event, Category, Tag, Location, Project, Coordinator, Guest
+        key_nodes = [
+            "Event",
+            "Category",
+            "Tag",
+            "Location",
+            "Project",
+            "Coordinator",
+            "Guest",
+        ]
+        node_pattern = r"Node:\s*(\w+)[\s\S]*?Properties:\s*([\s\S]*?)(?=\n\n|\Z)"
+
+        for match in re.finditer(node_pattern, full_schema, re.DOTALL):
+            node_type = match.group(1)
+            if node_type in key_nodes:
+                properties = match.group(2).strip()
+                # Filter out embedding properties
+                properties = re.sub(r"embedding:.*?\n", "", properties)
+                filtered_schema += f"Node: {node_type}\nProperties: {properties}\n\n"
+
+        # Extract relationship information
+        rel_pattern = r"Relationship:\s*([\s\S]*?)(?=\n\n|\Z)"
+        for match in re.finditer(rel_pattern, full_schema, re.DOTALL):
+            filtered_schema += f"Relationship: {match.group(1)}\n\n"
+
+        return filtered_schema
+
+    def _filter_results_attributes(self, results: List[dict]) -> List[dict]:
+        """Filter graph results to only include essential attributes."""
+        filtered_results = []
+
+        for result in results:
+            filtered_result = {}
+
+            for key, value in result.items():
+                # Skip embedding attributes
+                if key == "embedding" or key.endswith("_embedding"):
+                    continue
+
+                # Handle Neo4j node objects
+                if hasattr(value, "__dict__"):
+                    # Convert Neo4j node to dictionary with selected attributes
+                    node_dict = {}
+                    for attr_name in dir(value):
+                        # Skip private attributes, methods, and embeddings
+                        if (
+                            attr_name.startswith("_")
+                            or callable(getattr(value, attr_name))
+                            or attr_name == "embedding"
+                            or attr_name.endswith("_embedding")
+                        ):
+                            continue
+
+                        # Add the attribute to our filtered dictionary
+                        node_dict[attr_name] = getattr(value, attr_name)
+
+                    filtered_result[key] = node_dict
+                elif isinstance(value, dict):
+                    # Filter dictionary attributes
+                    filtered_dict = {
+                        k: v
+                        for k, v in value.items()
+                        if k != "embedding" and not k.endswith("_embedding")
+                    }
+                    filtered_result[key] = filtered_dict
+                else:
+                    # Keep primitive values as is
+                    filtered_result[key] = value
+
+            filtered_results.append(filtered_result)
+
+        return filtered_results
+
+    def _extract_cypher_query(self, text: str) -> str:
+        """Extract the Cypher query from the LLM's response.
+
+        This method extracts the Cypher query from between triple backticks
+        in the LLM's response.
+        """
+        # Extract the query from between triple backticks
+        import re
+
+        # Look for a query between ```cypher and ``` markers
+        cypher_pattern = r"```(?:cypher)?\s*([\s\S]+?)\s*```"
+        match = re.search(cypher_pattern, text, re.IGNORECASE)
+
+        if match:
+            query = match.group(1).strip()
+            logger.debug(f"Extracted Cypher query: {query}")
+            return query
+
+        # If no query found between backticks, log a warning and return empty string
+        logger.warning("Could not extract a Cypher query from LLM response")
+        return ""
 
 
 qa_template = """
@@ -307,7 +936,11 @@ The user has asked: {question}
 Based on the Cypher query results from the Neo4j database, provide a detailed and accurate answer.
 
 Context from database query results:
-{function_response}
+Graph Results:
+{graph_results}
+
+Vector Search Context (additional information):
+{vector_results}
 
 Important guidelines:
 1. If the results are empty, explain that no matching events were found.
@@ -319,13 +952,14 @@ Important guidelines:
 7. For events with dates, format them in a human-readable way.
 8. For events with locations, include the location information in your answer.
 9. For events with coordinators or guests, mention them when relevant.
+10. Prioritize information from the Graph Results, and use Vector Search Context as supplementary information.
 
 Based solely on the provided database results, answer the user's question:
 """
 
 qa_prompt = PromptTemplate(
     template=qa_template,
-    input_variables=["schema", "question", "function_response"],
+    input_variables=["schema", "question", "graph_results", "vector_results"],
 )
 
 # Create the hybrid search chain with custom prompts
@@ -344,10 +978,25 @@ hybrid_search_chain = HybridNeo4jSearchChain.from_llm(
 # %%
 # Example query based on use cases from README
 result = hybrid_search_chain.invoke(
-    # {"query": "Find music outdoor events with more than 100 participants"}
-    {"query": "Find theatre events with more than 100 participants"}
+    {
+        "query": "Find jazz concerts with more than 50 participants that took place after 31.03.2021"
+    }
 )
 
-logger.info(f"Query result: {result}")
+# Log the result - extract the actual result from the dictionary
+if isinstance(result, dict) and "result" in result:
+    logger.info(f"Query result: {result['result']}")
+else:
+    logger.info(f"Query result: {result}")
 
+# Add a comment explaining the issue and solution
+# The issue was that COUNT queries were only returning counts, not event IDs
+# We've modified the code to handle COUNT queries by:
+# 1. Detecting COUNT queries and skipping event ID extraction
+# 2. Updating the Cypher generation prompt to only return counts for count queries
+# 3. Modifying the _call method to skip vector search for COUNT queries
+# This approach is more efficient for large result sets, as collecting all event IDs
+# could be expensive and potentially overwhelm the model with too much data.
+# For detailed information about specific events, users should phrase their queries
+# to ask for specific events rather than counts.
 # %%
