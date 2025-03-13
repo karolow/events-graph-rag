@@ -26,8 +26,52 @@ FIELDTERMINATOR ';'
 // Create Event node with a unique identifier (using the CSV id column)
 MERGE (e:Event {id: row.id})
 SET e.name = row.event,
-    e.start_date = CASE WHEN row.start <> '' AND row.start <> '-' THEN row.start ELSE null END,
-    e.end_date = CASE WHEN row.end <> '' AND row.end <> '-' THEN row.end ELSE null END,
+    e.start_date_original = CASE WHEN row.start <> '' AND row.start <> '-' THEN row.start ELSE null END,
+    e.end_date_original = CASE WHEN row.end <> '' AND row.end <> '-' THEN row.end ELSE null END,
+    
+    // Store the date in ISO format (YYYY-MM-DD) for easier querying
+    // The format in CSV is now: "2021-10-02 19:00"
+    e.start_date = CASE 
+        WHEN row.start <> '' AND row.start <> '-' 
+        THEN substring(row.start, 0, 10) // Extract just the YYYY-MM-DD part
+        ELSE null 
+    END,
+    
+    // Also store year-month for easier filtering
+    e.start_date_year_month = CASE 
+        WHEN row.start <> '' AND row.start <> '-' 
+        THEN substring(row.start, 0, 7) // Extract just the YYYY-MM part
+        ELSE null 
+    END,
+    
+    // Store the time separately
+    e.start_time = CASE 
+        WHEN row.start <> '' AND row.start <> '-' 
+        THEN substring(row.start, 11) // Extract just the HH:MM part
+        ELSE null 
+    END,
+    
+    // Do the same for end date
+    e.end_date = CASE 
+        WHEN row.end <> '' AND row.end <> '-' 
+        THEN substring(row.end, 0, 10) // Extract just the YYYY-MM-DD part
+        ELSE null 
+    END,
+    
+    // Also store year-month for easier filtering
+    e.end_date_year_month = CASE 
+        WHEN row.end <> '' AND row.end <> '-' 
+        THEN substring(row.end, 0, 7) // Extract just the YYYY-MM part
+        ELSE null 
+    END,
+    
+    // Store the time separately
+    e.end_time = CASE 
+        WHEN row.end <> '' AND row.end <> '-' 
+        THEN substring(row.end, 11) // Extract just the HH:MM part
+        ELSE null 
+    END,
+    
     e.number_of_participants = CASE WHEN row.number_of_participants <> '' AND row.number_of_participants <> '-' THEN toInteger(row.number_of_participants) ELSE null END
 
 // Create Project node
@@ -147,10 +191,14 @@ def create_combined_text_property():
     WITH e, 
          e.name AS event_name,
          COALESCE(p.name, "") AS project_name,
-         COALESCE(l.name, "") AS location_name
+         COALESCE(l.name, "") AS location_name,
+         COALESCE(e.start_date, "") AS start_date,
+         COALESCE(e.start_time, "") AS start_time
     SET e.combined_text = event_name + 
                          CASE WHEN project_name <> "" THEN "\n" + project_name ELSE "" END +
-                         CASE WHEN location_name <> "" THEN "\nLocation: " + location_name ELSE "" END
+                         CASE WHEN location_name <> "" THEN "\nLocation: " + location_name ELSE "" END +
+                         CASE WHEN start_date <> "" THEN "\nDate: " + start_date ELSE "" END +
+                         CASE WHEN start_time <> "" THEN " at " + start_time ELSE "" END
     RETURN count(e) as updated_count
     """
     update_result = graph.query(create_combined_property_query)
@@ -185,6 +233,7 @@ def generate_embeddings():
     )
     logger.info("Generated embeddings for all events")
     return vector_index
+
 
 graph.refresh_schema()
 logger.info("Neo4j Graph Schema loaded")
