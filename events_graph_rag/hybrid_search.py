@@ -2,7 +2,8 @@
 import logging
 import os
 import re
-from typing import Any, List
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional
 
 import dotenv
 from langchain_community.vectorstores import Neo4jVector
@@ -11,9 +12,10 @@ from langchain_core.documents import Document
 from langchain_core.language_models.base import BaseLanguageModel
 from langchain_core.prompts import BasePromptTemplate, PromptTemplate
 from langchain_core.retrievers import BaseRetriever
-from langchain_mistralai import ChatMistralAI
+from langchain_groq import ChatGroq
 from langchain_neo4j import GraphCypherQAChain, Neo4jGraph
 from langchain_openai import OpenAIEmbeddings
+from reranker import RerankerConfig, rerank_documents
 from scipy.spatial.distance import cosine
 
 # Configure logging
@@ -86,9 +88,9 @@ except Exception as e:
     )
     logger.info("Successfully loaded vector index 'events' from Neo4j")
 
-# Initialize LLM
-# llm = ChatOpenAI(temperature=0, model="gpt-4o")
-llm = ChatMistralAI(temperature=0, model_name="mistral-large-latest")
+# Initialize LLMs for different tasks
+cypher_llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
+qa_llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
 
 # Create a custom prompt template for the Cypher generation
 cypher_generation_template = """
@@ -286,6 +288,10 @@ class DocumentProcessor:
 class HybridNeo4jSearchChain(GraphCypherQAChain):
     vector_retriever: BaseRetriever
     document_processor: DocumentProcessor
+    expansion_llm: Optional[BaseLanguageModel] = None
+    reranker_config: Optional[RerankerConfig] = None
+    _expansion_executor: ThreadPoolExecutor = None
+    _expanded_query_cache: Dict[str, str] = {}
 
     @classmethod
     def from_llm(
@@ -297,6 +303,8 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
         cypher_prompt: BasePromptTemplate | None = None,
         qa_prompt: BasePromptTemplate | None = None,
         document_processor: DocumentProcessor | None = None,
+        expansion_llm: BaseLanguageModel | None = None,
+        reranker_config: RerankerConfig | None = None,
         **kwargs: Any,
     ) -> "HybridNeo4jSearchChain":
         if cypher_prompt or qa_prompt:
@@ -356,8 +364,13 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
             graph_schema=standard_chain.graph_schema,
             vector_retriever=vector_retriever,
             document_processor=document_processor or DocumentProcessor(),
+            expansion_llm=qa_llm,
+            reranker_config=reranker_config,
             **kwargs,
         )
+
+        # Initialize the thread pool executor for async query expansion
+        chain._expansion_executor = ThreadPoolExecutor(max_workers=2)
 
         return chain
 
@@ -467,6 +480,10 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
         # First perform graph search
         query = inputs["query"]
 
+        # Start async LLM query expansion immediately
+        # This will run in parallel with the graph search
+        self._start_async_query_expansion(query)
+
         # Get a filtered version of the schema with only essential information
         schema = self._get_filtered_schema()
 
@@ -514,6 +531,7 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
 
         # Initialize vector results as empty
         vector_results_text = []
+        vector_docs = []
 
         # For COUNT queries, we don't do targeted vector search
         # Instead, we'll rely solely on the graph results
@@ -524,7 +542,51 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
         # Only perform vector search if we have graph results with event IDs
         elif event_ids:
             # Perform targeted vector search only on the events found by graph search
-            vector_results_text = self._perform_targeted_vector_search(query, event_ids)
+            # Now returns tuples of (text, similarity_score, event_info)
+            vector_results = self._perform_targeted_vector_search(query, event_ids)
+
+            # Convert the vector results to Document objects for reranking
+            if vector_results:
+                for text, similarity_score, event_info in vector_results:
+                    # Create a Document object with metadata
+                    doc = Document(
+                        page_content=text,
+                        metadata={
+                            "event_id": event_info["id"],
+                            "name": event_info["name"],
+                            "vector_score": similarity_score,  # Store original vector score
+                            "score": 0.0,  # Will be updated by reranker
+                        },
+                    )
+                    vector_docs.append(doc)
+
+                # Rerank documents if reranker is configured
+                if self.reranker_config and vector_docs:
+                    # Use the simplified reranker utility function
+                    vector_docs = rerank_documents(
+                        query, vector_docs, self.reranker_config
+                    )
+
+                    # Log reranking results
+                    logger.info(f"Reranked {len(vector_docs)} documents")
+                    for doc in vector_docs:
+                        event_name = doc.metadata.get("name", "Unknown")
+                        event_id = doc.metadata.get("event_id", "Unknown")
+                        reranker_score = doc.metadata.get("reranker_score", 0)
+                        logger.info(
+                            f"Reranked Event: {event_name} (ID: {event_id}) - Relevance score: {reranker_score:.4f}"
+                        )
+
+                # Sort documents by reranker score (highest first) to ensure best results are used first
+                vector_docs = sorted(
+                    vector_docs,
+                    key=lambda x: x.metadata.get("reranker_score", 0),
+                    reverse=True,
+                )
+
+                # Extract text content from all documents for QA chain
+                vector_results_text = [doc.page_content for doc in vector_docs]
+
             logger.info(
                 f"Performed vector search on {len(event_ids)} events from graph search"
             )
@@ -540,7 +602,11 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
         )
 
         # Return the result as a dictionary
-        return {"result": qa_result}
+        return {
+            "result": qa_result,
+            "graph_results": graph_results,
+            "vector_docs": vector_docs,
+        }
 
     def _extract_key_search_terms(self, query: str) -> str:
         """Extract key search terms from the user query for more focused vector search.
@@ -549,7 +615,34 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
         filtering out structural language like "Find all" or "with more than",
         and expands key terms with related concepts for better semantic matching.
         """
-        # Common words to filter out
+        # Check if we have a cached expanded query
+        if query in self._expanded_query_cache:
+            logger.info(f"Using cached expanded query for: '{query}'")
+            return self._expanded_query_cache[query]
+
+        # Try to use the LLM-based expansion
+        try:
+            # Check if we have an async expansion in progress
+            if hasattr(self, "_expansion_future") and query in getattr(
+                self, "_expansion_future", {}
+            ):
+                # Try to get the result if it's ready
+                future = self._expansion_future[query]
+                if future.done():
+                    expanded_query = future.result()
+                    logger.info(f"Using async LLM expanded query: '{expanded_query}'")
+                    return expanded_query
+        except Exception as e:
+            logger.warning(f"Error retrieving async expansion: {str(e)}")
+
+        # If we reach here, we don't have an expanded query yet
+        # Extract simple key terms as a fallback
+        import re
+
+        # Extract quoted phrases
+        quoted_phrases = re.findall(r'"([^"]+)"', query)
+
+        # Basic list of filter words
         filter_words = {
             "find",
             "all",
@@ -560,75 +653,13 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
             "or",
             "the",
             "that",
-            "have",
-            "has",
-            "had",
-            "having",
-            "get",
-            "show",
-            "list",
-            "display",
-            "return",
-            "give",
-            "me",
-            "about",
             "for",
             "in",
             "on",
             "at",
-            "to",
-            "from",
-            "by",
-            "of",
-            "would",
-            "be",
-            "best",
-            "most",
-            "many",
-            "much",
-            "some",
-            "any",
-            "few",
-            "little",
-            "who",
         }
 
-        # Semantic expansion mappings for key terms
-        semantic_expansions = {
-            # "art": [
-            #     "exhibition",
-            #     "gallery",
-            #     "museum",
-            #     "visual",
-            #     "painting",
-            #     "sculpture",
-            # ],
-            "exhibition": ["art", "gallery", "museum", "display", "showcase"],
-            "music": [
-                "concert",
-                "recital",
-                "performance",
-                "orchestra",
-                "band",
-                "choir",
-            ],
-            "theater": ["drama", "play", "stage", "acting", "performance"],
-            "workshop": ["class", "seminar", "training", "education"],
-            "festival": ["celebration", "fair", "carnival"],
-            "conference": ["symposium", "convention", "meeting", "summit"],
-        }
-
-        # Extract potential key terms by removing filter words and keeping phrases
-        # First, look for quoted phrases
-        import re
-
-        quoted_phrases = re.findall(r'"([^"]+)"', query)
-
-        # Remove quoted phrases from the query
-        for phrase in quoted_phrases:
-            query = query.replace(f'"{phrase}"', "")
-
-        # Split the remaining query into words and filter out common words
+        # Split the query and filter out common words
         words = query.lower().split()
         key_terms = [
             word for word in words if word not in filter_words and len(word) > 2
@@ -637,40 +668,88 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
         # Combine quoted phrases and key terms
         all_terms = quoted_phrases + key_terms
 
-        # Expand key terms with related concepts
-        expanded_terms = set(all_terms)
-        for term in all_terms:
-            # Check if this term has semantic expansions
-            for key, expansions in semantic_expansions.items():
-                # If the term is in the expansions, add the key
-                if term in expansions:
-                    expanded_terms.add(key)
-                # If the term is a key, add all its expansions
-                elif term == key:
-                    expanded_terms.update(expansions)
-                # If the term contains a key or expansion, add related terms
-                else:
-                    for word in [key] + expansions:
-                        if word in term or term in word:
-                            expanded_terms.add(key)
-                            expanded_terms.update(expansions)
-                            break
-
         # If we have no terms, fall back to the original query
-        if not expanded_terms:
+        if not all_terms:
             logger.info(f"No key terms extracted, using original query: '{query}'")
             return query
 
         # Join the terms into a search query
-        search_terms = " ".join(expanded_terms)
-        logger.info(
-            f"Extracted and expanded search terms: '{search_terms}' from query: '{query}'"
-        )
+        search_terms = " ".join(all_terms)
+        logger.info(f"Using simple fallback query expansion: '{search_terms}'")
         return search_terms
+
+    def _llm_expand_query(self, query: str) -> str:
+        """Use an LLM to expand the query with semantically related terms.
+
+        This method sends the query to an LLM and asks it to extract and expand
+        key search terms with related concepts for better semantic matching.
+        """
+        if not self.expansion_llm:
+            logger.warning("No expansion LLM available for query expansion")
+            return query
+
+        try:
+            # Create a prompt for the LLM that includes word filtering guidance
+            prompt = f"""Extract and expand the key search terms from this query. 
+            Focus on the most important semantic concepts and add related terms that would help in a vector search.
+            
+            FILTER OUT common words like:
+            - Articles (the, a, an)
+            - Prepositions (in, on, at, to, from, by, of)
+            - Conjunctions (and, or, but)
+            - Common verbs (find, show, list, display, return, give)
+            - Filler words (all, with, more, than, about, for)
+            
+            KEEP important semantic terms related to:
+            - Event types (concert, exhibition, workshop, festival, conference)
+            - Art forms (music, visual art, theater, dance)
+            - Specific genres (jazz, classical, rock, contemporary)
+            - Locations and names
+            
+            For example, if the query mentions 'jazz concert', you might add terms like 'music', 'performance', 'band', etc.
+            
+            ONLY return the expanded search terms as a space-separated list of words. Do not include any explanations or other text.
+            
+            Query: {query}
+            
+            Expanded search terms: """
+
+            # Get the expanded query from the LLM
+            response = self.expansion_llm.invoke(prompt)
+
+            # Extract content from the response
+            if hasattr(response, "content"):
+                expanded_query = response.content.strip()
+            else:
+                expanded_query = str(response).strip()
+
+            # Cache the result
+            self._expanded_query_cache[query] = expanded_query
+
+            logger.info(f"LLM expanded query: '{query}' → '{expanded_query}'")
+            return expanded_query
+        except Exception as e:
+            logger.warning(f"Error in LLM query expansion: {str(e)}")
+            return query
+
+    def _start_async_query_expansion(self, query: str):
+        """Start asynchronous query expansion using an LLM.
+
+        This method initiates the query expansion in a separate thread so it doesn't
+        block the main search process.
+        """
+        if not hasattr(self, "_expansion_future"):
+            self._expansion_future = {}
+
+        # Submit the expansion task to the thread pool
+        self._expansion_future[query] = self._expansion_executor.submit(
+            self._llm_expand_query, query
+        )
+        logger.info(f"Started async query expansion for: '{query}'")
 
     def _perform_targeted_vector_search(
         self, query: str, event_ids: List[str]
-    ) -> List[str]:
+    ) -> List[tuple[str, float, Dict[str, str]]]:
         """Perform vector search only on specific events from graph search."""
         # If no event IDs, return empty list
         if not event_ids:
@@ -678,6 +757,9 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
             return []
 
         logger.info(f"Performing vector search on event IDs: {event_ids}")
+
+        # Start async LLM query expansion for future searches
+        self._start_async_query_expansion(query)
 
         # Extract key search terms for more focused vector search
         search_query = self._extract_key_search_terms(query)
@@ -747,12 +829,13 @@ class HybridNeo4jSearchChain(GraphCypherQAChain):
                 f"Top event match: {similarities[0][2]['name']} (ID: {similarities[0][2]['id']}) with score {similarities[0][0]:.4f}"
             )
 
-            # Return the top 5 most similar texts
-            return [text for _, text, _ in similarities[:5]]
+            # Return all texts with their similarity scores and event info
+            # This allows us to rerank all documents and provide more comprehensive results
+            return [(text, sim, info) for sim, text, info in similarities]
 
         except Exception as e:
             logger.error(f"Error performing targeted vector search: {e}")
-            return []
+            return []  # Return empty list in case of error
 
     def _get_event_ids_from_vector_docs(self, vector_docs: List[Document]) -> List[str]:
         """Extract event IDs from vector search documents."""
@@ -962,14 +1045,21 @@ qa_prompt = PromptTemplate(
     input_variables=["schema", "question", "graph_results", "vector_results"],
 )
 
-# Create the hybrid search chain with custom prompts
+# Create reranker configuration
+reranker_config = RerankerConfig(
+    model="jina-reranker-v2-base-multilingual",
+    top_k=20,
+)
+
+# Create the hybrid search chain with custom prompts and reranker
 hybrid_search_chain = HybridNeo4jSearchChain.from_llm(
-    cypher_llm=llm,
-    qa_llm=llm,
+    cypher_llm=cypher_llm,
+    qa_llm=qa_llm,
     graph=graph,
-    vector_retriever=vector_index.as_retriever(search_kwargs={"k": 5}),
+    vector_retriever=vector_index.as_retriever(search_kwargs={"k": 20}),
     cypher_prompt=cypher_prompt,
     qa_prompt=qa_prompt,
+    reranker_config=reranker_config,
     verbose=True,
     use_function_response=True,
     allow_dangerous_requests=True,
