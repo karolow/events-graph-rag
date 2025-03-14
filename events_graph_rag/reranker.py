@@ -10,19 +10,19 @@ import aiohttp
 import dotenv
 from langchain_core.documents import Document
 
+from .config import RERANKER_CONFIG
+
 # Load environment variables
 dotenv.load_dotenv(".env", override=True)
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class RerankerConfig:
-    """Simple configuration for reranker."""
-
-    model: str = "jina-reranker-v2-base-multilingual"
-    top_k: int = 100
+# Check if JINA_API_KEY is set
+api_key = os.environ.get("JINA_API_KEY")
+if not api_key:
+    logger.error("JINA_API_KEY environment variable is not set!")
+    raise ValueError("JINA_API_KEY environment variable is required")
 
 
 @dataclass
@@ -36,20 +36,14 @@ class RerankerResult:
 class JinaReranker:
     """Simple Jina reranker implementation."""
 
-    def __init__(self, config: Optional[RerankerConfig] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         """Initialize Jina reranker.
 
         Args:
-            config: Optional reranker configuration
+            config: Optional reranker configuration dictionary
         """
-        self.config = config or RerankerConfig()
+        self.config = config or RERANKER_CONFIG
         logger.info(f"Initializing JinaReranker with config: {self.config}")
-
-        # Check if JINA_API_KEY is set
-        api_key = os.environ.get("JINA_API_KEY")
-        if not api_key:
-            logger.error("JINA_API_KEY environment variable is not set!")
-            raise ValueError("JINA_API_KEY environment variable is required")
 
         self.url = "https://api.jina.ai/v1/rerank"
         self.headers = {
@@ -81,10 +75,10 @@ class JinaReranker:
 
             # Prepare request data
             data = {
-                "model": self.config.model,
+                "model": self.config["model"],
                 "query": query,
                 "documents": texts,
-                "top_n": self.config.top_k,
+                "top_n": self.config["top_k"],
             }
             logger.info(f"Reranking {len(texts)} documents with query: {query}")
 
@@ -111,7 +105,7 @@ class JinaReranker:
 
                     # Sort by score in descending order
                     reranked.sort(key=lambda x: x.score, reverse=True)
-                    return reranked[: self.config.top_k]
+                    return reranked[: self.config["top_k"]]
 
         except Exception as e:
             logger.error(f"Error during reranking: {str(e)}")
@@ -120,7 +114,7 @@ class JinaReranker:
 
 
 def rerank_documents(
-    query: str, documents: List[Document], config: Optional[RerankerConfig] = None
+    query: str, documents: List[Document], config: Optional[Dict[str, Any]] = None
 ) -> List[Document]:
     """Utility function to rerank langchain documents.
 
@@ -141,7 +135,7 @@ def rerank_documents(
 
     # Create reranker
     try:
-        reranker = JinaReranker(config or RerankerConfig())
+        reranker = JinaReranker(config or RERANKER_CONFIG)
         logger.info("JinaReranker initialized successfully")
 
         # Run the reranker synchronously

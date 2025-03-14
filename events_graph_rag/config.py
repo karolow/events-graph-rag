@@ -1,0 +1,90 @@
+import logging
+import os
+from typing import Any, Dict
+
+import dotenv
+
+# Load environment variables
+dotenv.load_dotenv(".env", override=True)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Neo4j connection parameters
+NEO4J_CONFIG = {
+    "url": os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
+    "username": os.environ.get("NEO4J_USERNAME", ""),
+    "password": os.environ.get("NEO4J_PASSWORD", ""),
+}
+
+# Vector index configuration
+VECTOR_INDEX_CONFIG = {
+    "index_name": "events_vector_index",  # Primary index name
+    "fallback_index_name": "events",  # Fallback index name
+    "node_label": "Event",
+    "text_node_property": "combined_text",
+    "embedding_node_property": "embedding",
+    "retrieval_query": """
+    WITH node, score
+    MATCH (e:Event) WHERE e = node
+    RETURN e.combined_text AS text,
+           elementId(e) AS id,
+           {
+               event_id: e.id, 
+               name: e.name, 
+               number_of_participants: e.number_of_participants,
+               start_date: e.start_date,
+               start_time: e.start_time,
+               location: CASE 
+                   WHEN EXISTS((e)-[:TAKES_PLACE_IN]->(:Location)) 
+                   THEN [(e)-[:TAKES_PLACE_IN]->(l:Location) | l.name][0]
+                   ELSE null
+               END,
+               category: CASE 
+                   WHEN EXISTS((e)-[:BELONGS_TO]->(:Category)) 
+                   THEN [(e)-[:BELONGS_TO]->(c:Category) | c.name][0]
+                   ELSE null
+               END
+           } AS metadata,
+           score
+    """,
+}
+
+# LLM model configuration
+LLM_CONFIG = {
+    "provider": "gemini",  # Options: "groq", "gemini"
+    "groq_model": "llama-3.3-70b-versatile",
+    "gemini_model": "gemini-2.0-flash",
+    "temperature": 0,
+}
+
+# Reranker configuration
+RERANKER_CONFIG = {
+    "model": "jina-reranker-v2-base-multilingual",
+    "top_k": 20,
+}
+
+# Search configuration
+SEARCH_CONFIG = {
+    "vector_top_k": 20,
+    "max_workers": 2,
+    "max_graph_results_for_vector": 50,
+    "use_reranker": True,
+    "min_graph_results": 1,
+}
+
+
+def get_config() -> Dict[str, Any]:
+    """
+    Returns the complete configuration dictionary.
+    """
+    return {
+        "neo4j": NEO4J_CONFIG,
+        "vector_index": VECTOR_INDEX_CONFIG,
+        "llm": LLM_CONFIG,
+        "reranker": RERANKER_CONFIG,
+        "search": SEARCH_CONFIG,
+    }
