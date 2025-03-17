@@ -29,22 +29,22 @@ You can run evaluations using the `eval_cli.py` script:
 
 ```bash
 # Run both graph and end-to-end evaluations
-python -m evals.events_graph_rag.eval_cli --test-cases evals/events_graph_rag/sample_test_cases.json --output results.json
+eval-events --test-cases evals/events_graph_rag/sample_test_cases.json --output results.json
 
 # Run only graph query evaluation
-python -m evals.events_graph_rag.eval_cli --type graph --test-cases evals/events_graph_rag/sample_test_cases.json --output graph_results.json
+eval-events --type graph --test-cases evals/events_graph_rag/sample_test_cases.json --output graph_results.json
 
 # Run only end-to-end evaluation
-python -m evals.events_graph_rag.eval_cli --type end-to-end --test-cases evals/events_graph_rag/sample_test_cases.json --output e2e_results.json
+eval-events --type end-to-end --test-cases evals/events_graph_rag/sample_test_cases.json --output e2e_results.json
 
 # Enable verbose logging
-python -m evals.events_graph_rag.eval_cli --test-cases evals/events_graph_rag/sample_test_cases.json --verbose
+eval-events --test-cases evals/events_graph_rag/sample_test_cases.json --verbose
 
 # Specify model name for tracking purposes
-python -m evals.events_graph_rag.eval_cli --test-cases evals/events_graph_rag/sample_test_cases.json --model-name "gemini-2.0-flash"
+eval-events --test-cases evals/events_graph_rag/sample_test_cases.json --model-name "gemini-2.0-flash"
 
 # Collect few-shot examples from successful graph queries
-python -m evals.events_graph_rag.eval_cli --type graph --test-cases evals/events_graph_rag/sample_test_cases.json --few-shot-examples few_shot_examples.json
+eval-events --type graph --test-cases evals/events_graph_rag/sample_test_cases.json --few-shot-examples few_shot_examples.json
 ```
 
 ## Adding Test Cases
@@ -52,7 +52,7 @@ python -m evals.events_graph_rag.eval_cli --type graph --test-cases evals/events
 You can add test cases to an existing test cases file using the `--add-test-case` option:
 
 ```bash
-python -m evals.events_graph_rag.eval_cli --add-test-case --test-cases evals/events_graph_rag/sample_test_cases.json --query "Find events featuring jazz music" --expected-ids "7,15,32"
+eval-events --add-test-case --test-cases evals/events_graph_rag/sample_test_cases.json --query "Find events featuring jazz music" --expected-ids "7,15,32"
 ```
 
 ## Few-Shot Examples Collection
@@ -69,7 +69,7 @@ The evaluation system can collect successful query-cypher pairs for future few-s
 To collect few-shot examples, use the `--few-shot-examples` option:
 
 ```bash
-python -m evals.events_graph_rag.eval_cli --type graph --test-cases evals/events_graph_rag/sample_test_cases.json --few-shot-examples few_shot_examples.json
+eval-events --type graph --test-cases evals/events_graph_rag/sample_test_cases.json --few-shot-examples few_shot_examples.json
 ```
 
 Only queries that achieve a perfect F1 score (1.0) are added to the few-shot examples file. If a query is already in the file, it won't be added again.

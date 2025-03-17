@@ -22,8 +22,13 @@ dependencies = [
 dev = ["ruff", "ipykernel"]
 
 [project.scripts]
-events-rag = "events_graph_rag.cli:cli"
+events = "events_graph_rag.cli:cli"
+eval-events = "evals.events_graph_rag.eval_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["events_graph_rag", "evals"]
 exclude = ["db_data"]
+
+[build-system]
+requires = ["hatchling>=1.0.0"]
+build-backend = "hatchling.build"

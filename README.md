@@ -18,17 +18,66 @@ source: https://neo4j.com/docs/operations-manual/current/docker/introduction/
 
 The project uses a two-step process:
 
-1. **Data Loading**: Run `load_data_to_neo4j.py` to:
-   - Load event data from CSV into Neo4j
+1. **Data Loading**: Load event data from CSV into Neo4j to:
    - Create the graph structure with nodes and relationships
    - Generate combined text properties for each event
    - Create embeddings for all events using OpenAI's embedding model
    - Store embeddings in the Neo4j database
 
-2. **Semantic Search**: Use `hybrid_search.py` to:
+2. **Semantic Search**: Search the graph database to:
    - Perform semantic searches using the pre-generated embeddings
    - Generate Cypher queries based on natural language questions
    - Return detailed answers based on the graph database
+
+## CLI Usage
+
+The project provides a command-line interface for easy interaction with the system:
+
+### Installation
+
+```bash
+# Install the package (from the project root directory)
+uv pip install -e .
+```
+
+### Available Commands
+
+#### Load Data
+
+Load events data from a CSV file and create embeddings:
+
+```bash
+# Load data using the default sample dataset
+events load
+
+# Load data from a custom CSV URL
+events load --csv-url https://example.com/events_data.csv
+```
+
+#### Search Events
+
+Search for events using natural language queries:
+
+```bash
+# Basic search
+events search --query "Find jazz concerts with more than 50 participants"
+
+# Verbose mode (shows detailed results including Cypher query and raw results)
+events search --query "Find outdoor music events" --verbose
+```
+
+### Examples
+
+```bash
+# Load sample data
+events load
+
+# Search for specific events
+events search --query "What are the music events that have more than 1 coordinator and more than 50 participants?"
+
+# Get detailed search results
+events search --query "Find events in which Monika Borycka participated" --verbose
+```
 
 ## Relationships
 
