@@ -59,3 +59,39 @@ The project uses a two-step process:
 3. Find events in which one person and not the other person participated
 4. Find events in places untypical for culture events
 5. Find music workshops with more than one coordinator
+
+## Battle-tested examples
+
+1. What are the music events that have more than 1 coordinator and more than 50 participants has taken place after 31.01.2021?
+2. Find events in which Monika Borycka participated alone / with other people.
+3. Find outdoor music events with more than 100 participants.
+4. Find jazz concerts with more than 50 participants that took place after 31.03.2021
+
+
+**Hybrid Search Flow (Textual Representation)**
+
+1.  **User Query:** The process begins with a user submitting a query.
+2.  **Initiate Search:** The search process starts.
+3.  **Generate Cypher:** A Cypher query is generated based on the user's query.
+4.  **Cypher LLM:** A Language Model assists in crafting the Cypher query.
+5.  **Extract Cypher:** The generated Cypher query is extracted as text.
+6.  **Execute Graph Query:** The Cypher query is executed against the graph database.
+7.  **Filter Results:** The initial results from the graph query are filtered.
+8.  **Vector Search Needed?:** A decision is made whether to perform vector search or not, based on the graph query results.
+
+    *   If **Yes:**
+        9.  **Execute Vector Search:** The vector search process begins.
+        10. **Expand Query:** The search query is expanded for better vector search.
+        11. **Vector Search:** The vector search is executed.
+        12. **Re-rank:** The vector search results are re-ranked.
+        13. **Format Vector:** The re-ranked vector search results are formatted.
+    *   If **No:**
+        9.  **Format Graph:** The graph search results are formatted.
+
+9.  **Compose Answer:** Information from the graph and/or vector search is combined to generate an answer.
+10. **Final Answer:** The composed answer is presented.
+
+This textual representation conveys the essential steps and branching logic of the hybrid search flow.
+
+## TODO: 
+- convert dates to days of week

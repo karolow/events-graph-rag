@@ -20,6 +20,11 @@ NEO4J_CONFIG = {
     "password": os.environ.get("NEO4J_PASSWORD", ""),
 }
 
+# Data source configuration
+DATA_SOURCE_CONFIG = {
+    "default_csv_url": "https://raw.githubusercontent.com/karolow/datasets/refs/heads/main/events_kmo_sample.csv"
+}
+
 # Vector index configuration
 VECTOR_INDEX_CONFIG = {
     "index_name": "events_vector_index",  # Primary index name
@@ -55,10 +60,32 @@ VECTOR_INDEX_CONFIG = {
 
 # LLM model configuration
 LLM_CONFIG = {
-    "provider": "gemini",  # Options: "groq", "gemini"
+    "provider": "gemini",  # Options: "groq", "gemini", "openai", "anthropic"
     "groq_model": "llama-3.3-70b-versatile",
     "gemini_model": "gemini-2.0-flash",
+    "openai_model": "gpt-4o",
+    "anthropic_model": "claude-3.7-sonnet",
     "temperature": 0,
+    # Separate configuration for Cypher generation
+    "cypher": {
+        "provider": "gemini",  # Options: "groq", "gemini", "openai", "anthropic"
+        "groq_model": "deepseek-r1-distill-qwen-32b",
+        "gemini_model": "gemini-2.0-flash",
+        "openai_model": "gpt-4o",
+        "anthropic_model": "claude-3-7-sonnet-latest",
+        "temperature": 0,
+    },
+    # Available models by provider for CLI selection
+    "available_models": {
+        "groq": [
+            "qwen-2.5-coder-32b",
+            "llama-3.3-70b-versatile",
+            "deepseek-r1-distill-qwen-32b",
+        ],
+        "gemini": ["gemini-2.0-flash", "gemini-2.0-pro"],
+        "openai": ["gpt-4o", "gpt-4o-mini"],
+        "anthropic": ["claude-3.7-sonnet", "claude-3.7-sonnet-thinking"],
+    },
 }
 
 # Reranker configuration
@@ -73,7 +100,7 @@ SEARCH_CONFIG = {
     "max_workers": 2,
     "max_graph_results_for_vector": 50,
     "use_reranker": True,
-    "min_graph_results": 1,
+    "min_graph_results": 3,
 }
 
 
@@ -83,6 +110,7 @@ def get_config() -> Dict[str, Any]:
     """
     return {
         "neo4j": NEO4J_CONFIG,
+        "data_source": DATA_SOURCE_CONFIG,
         "vector_index": VECTOR_INDEX_CONFIG,
         "llm": LLM_CONFIG,
         "reranker": RERANKER_CONFIG,

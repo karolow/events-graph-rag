@@ -14,7 +14,16 @@ dependencies = [
     "langchain_mistralai",
     "langchain_groq",
     "langchain_anthropic",
+    "langchain_google_genai",
     "scipy",
+    "click",
 ]
 [project.optional-dependencies]
 dev = ["ruff", "ipykernel"]
+
+[project.scripts]
+events-rag = "events_graph_rag.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["events_graph_rag", "evals"]
+exclude = ["db_data"]
