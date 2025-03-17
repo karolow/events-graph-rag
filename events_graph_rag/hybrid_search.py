@@ -24,7 +24,6 @@ from events_graph_rag.llm_factory import LLMFactory
 from events_graph_rag.neo4j_client import Neo4jClient
 from events_graph_rag.prompts import cypher_prompt, qa_prompt
 from events_graph_rag.query_generator import QueryGenerator
-from events_graph_rag.reranker import RerankerConfig
 from events_graph_rag.vector_client import VectorClient
 
 
@@ -39,7 +38,6 @@ class HybridSearch:
         vector_client: Optional[VectorClient] = None,
         query_generator: Optional[QueryGenerator] = None,
         document_processor: Optional[DocumentProcessor] = None,
-        reranker_config: Optional[RerankerConfig] = None,
         verbose: bool = False,
     ):
         """Initialize the hybrid search."""
@@ -60,10 +58,10 @@ class HybridSearch:
         if cypher_llm:
             self.cypher_llm = cypher_llm
         else:
-            # Use the same LLM for Cypher generation by default
-            self.cypher_llm = self.llm
+            # Use a dedicated Cypher LLM by default
+            self.cypher_llm = LLMFactory.create_cypher_llm()
         logger.info(
-            f"Initialized Cypher LLM with provider: {LLM_CONFIG.get('provider')}"
+            f"Initialized Cypher LLM with provider: {LLM_CONFIG.get('cypher', {}).get('provider', LLM_CONFIG.get('provider'))}"
         )
 
         # Initialize clients
@@ -83,23 +81,19 @@ class HybridSearch:
         logger.info("Initialized DocumentProcessor")
 
         # Initialize reranker configuration
-        if reranker_config:
-            self.reranker_config = reranker_config
-        else:
-            # Explicitly require configuration values
-            if "model" not in RERANKER_CONFIG:
-                raise ValueError("RERANKER_CONFIG must contain 'model'")
+        if not RERANKER_CONFIG:
+            raise ValueError("RERANKER_CONFIG must be provided")
 
-            if "top_k" not in RERANKER_CONFIG:
-                raise ValueError("RERANKER_CONFIG must contain 'top_k'")
+        if "model" not in RERANKER_CONFIG:
+            raise ValueError("RERANKER_CONFIG must contain 'model'")
 
-            self.reranker_config = RerankerConfig(
-                model=RERANKER_CONFIG["model"],
-                top_k=RERANKER_CONFIG["top_k"],
-            )
+        if "top_k" not in RERANKER_CONFIG:
+            raise ValueError("RERANKER_CONFIG must contain 'top_k'")
+
+        self.reranker_config = RERANKER_CONFIG
 
         logger.info(
-            f"Initialized Reranker config: {self.reranker_config.model} with top_k={self.reranker_config.top_k}"
+            f"Initialized Reranker config: {self.reranker_config['model']} with top_k={self.reranker_config['top_k']}"
         )
 
         # Set up chain components
@@ -417,7 +411,7 @@ class HybridSearch:
                 query=query,
                 documents=vector_results,
                 top_k=top_k,
-                model=self.reranker_config.model,
+                model=self.reranker_config["model"],
             )
             rerank_time = time.time() - rerank_start
             logger.info(f"Reranking completed in {rerank_time:.2f}s")

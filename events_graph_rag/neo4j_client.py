@@ -5,7 +5,12 @@ from langchain_community.vectorstores import Neo4jVector
 from langchain_neo4j import Neo4jGraph
 from langchain_openai import OpenAIEmbeddings
 
-from events_graph_rag.config import NEO4J_CONFIG, VECTOR_INDEX_CONFIG, logger
+from events_graph_rag.config import (
+    DATA_SOURCE_CONFIG,
+    NEO4J_CONFIG,
+    VECTOR_INDEX_CONFIG,
+    logger,
+)
 
 
 class Neo4jClient:
@@ -214,10 +219,7 @@ class Neo4jClient:
     # Data loading functionality from load_data_to_neo4j.py
     def load_events_from_csv(self, csv_url: str | None = None) -> None:
         """Load events data from CSV into Neo4j."""
-        csv_url = (
-            csv_url
-            or "https://raw.githubusercontent.com/karolow/datasets/refs/heads/main/events_kmo_sample.csv"
-        )
+        csv_url = csv_url or DATA_SOURCE_CONFIG["default_csv_url"]
 
         q_load_events = f"""
         LOAD CSV WITH HEADERS
@@ -302,7 +304,7 @@ class Neo4jClient:
 
         // Process guests/participants (comma-separated)
         WITH e, p, row
-        FOREACH (guest IN CASE WHEN row.guests_surnames <> '' AND row.guests_surnames <> '-' THEN split(row.guests_surnames, ',') ELSE [] END |
+        FOREACH (guest IN CASE WHEN row.guests <> '' AND row.guests <> '-' THEN split(row.guests, ',') ELSE [] END |
             MERGE (g:Guest {{name: trim(guest)}})
             MERGE (g)-[:PARTICIPATES_IN]->(e)
         )

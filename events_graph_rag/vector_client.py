@@ -10,7 +10,7 @@ from events_graph_rag.config import (
     VECTOR_INDEX_CONFIG,
     logger,
 )
-from events_graph_rag.reranker import RerankerConfig, rerank_documents
+from events_graph_rag.reranker import rerank_documents
 
 
 class VectorClient:
@@ -234,11 +234,12 @@ class VectorClient:
             raise ValueError("model must be provided")
 
         try:
-            # Create reranker config
-            reranker_config = RerankerConfig(model=model, top_k=top_k)
-
-            # Use the reranker utility function
-            reranked_docs = rerank_documents(query, documents, reranker_config)
+            # Use the reranker utility function with dictionary config
+            reranked_docs = rerank_documents(
+                query,
+                documents,
+                {"model": model, "top_k": top_k},  # Pass config as dictionary
+            )
 
             # Sort documents by reranker score (highest first)
             sorted_docs = sorted(
