@@ -197,7 +197,7 @@ ORDER BY e.start_date
 Example 11: Find events where a particular guest participated alone
 ```cypher
 MATCH (g:Guest)-[:PARTICIPATES_IN]->(e:Event)
-WHERE toLower(g.name) = 'monika borycka'
+WHERE toLower(g.name) = 'alice jones'
 WITH e
 MATCH (participant:Guest)-[:PARTICIPATES_IN]->(e)
 WITH e, COUNT(participant) AS participantCount

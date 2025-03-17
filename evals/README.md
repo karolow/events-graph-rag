@@ -61,7 +61,7 @@ The evaluation system can collect successful query-cypher pairs for future few-s
 
 ```json
 {
-  "Find events in which Monika Borycka participated alone": "MATCH (p:Person {name: 'Monika Borycka'})-[:PARTICIPATED_IN]->(e:Event) WHERE NOT EXISTS((e)<-[:PARTICIPATED_IN]-(:Person)) OR COUNT((e)<-[:PARTICIPATED_IN]-(:Person)) = 1 RETURN e",
+  "Find events in which Alice Jones participated alone": "MATCH (p:Person {name: 'Alice Jones'})-[:PARTICIPATED_IN]->(e:Event) WHERE NOT EXISTS((e)<-[:PARTICIPATED_IN]-(:Person)) OR COUNT((e)<-[:PARTICIPATED_IN]-(:Person)) = 1 RETURN e",
   "Find outdoor music events with more than 100 participants": "MATCH (e:Event)-[:BELONGS_TO]->(c:Category {name: 'Music'}), (e)-[:TAKES_PLACE_IN]->(l:Location {type: 'Outdoor'}) WHERE e.number_of_participants > 100 RETURN e"
 }
 ```
@@ -103,10 +103,10 @@ The evaluation results are saved in a JSON file with the following structure:
     "few_shot_examples_file": "few_shot_examples.json",
     "details": [
       {
-        "query": "Find events in which Monika Borycka participated alone",
+        "query": "Find events in which Alice Jones participated alone",
         "expected_ids": [121],
         "actual_ids": [121],
-        "cypher_query": "MATCH (p:Person {name: 'Monika Borycka'})-[:PARTICIPATED_IN]->(e:Event) WHERE NOT EXISTS((e)<-[:PARTICIPATED_IN]-(:Person)) OR COUNT((e)<-[:PARTICIPATED_IN]-(:Person)) = 1 RETURN e",
+        "cypher_query": "MATCH (p:Person {name: 'Alice Jones'})-[:PARTICIPATED_IN]->(e:Event) WHERE NOT EXISTS((e)<-[:PARTICIPATED_IN]-(:Person)) OR COUNT((e)<-[:PARTICIPATED_IN]-(:Person)) = 1 RETURN e",
         "metrics": {
           "precision": 1.0,
           "recall": 1.0,
@@ -139,7 +139,7 @@ The evaluation results are saved in a JSON file with the following structure:
     "total_evaluation_time": 25.0,
     "details": [
       {
-        "query": "Find events in which Monika Borycka participated alone",
+        "query": "Find events in which Alice Jones participated alone",
         "expected_ids": [121],
         "actual_ids": [121],
         "graph_ids": [121],
@@ -158,7 +158,7 @@ The evaluation results are saved in a JSON file with the following structure:
         "total_search_time": 0.8,
         "success": true,
         "error": null,
-        "answer": "Monika Borycka participated alone in one event: [Event details...]"
+        "answer": "Alice Jones participated alone in one event: [Event details...]"
       },
       ...
     ]
@@ -175,7 +175,7 @@ from evals.events_graph_rag.evaluator import GraphQueryEvaluator, EndToEndEvalua
 
 # Define test cases
 test_cases = {
-    "Find events in which Monika Borycka participated alone": [121],
+    "Find events in which Alice Jones participated alone": [121],
     "Find outdoor music events with more than 100 participants": [1, 34, 77]
 }
 

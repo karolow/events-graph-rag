@@ -76,11 +76,12 @@ events load
 events search --query "What are the music events that have more than 1 coordinator and more than 50 participants?"
 
 # Get detailed search results
-events search --query "Find events in which Monika Borycka participated" --verbose
+events search --query "Find events in which Alice Jones participated" --verbose
 ```
 
 ## Relationships
 
+```
 (:Event)-[:HAS_TOPIC]->(:Tag)
 (:Event)-[:BELONGS_TO]->(:Category)
 (:Event)-[:TAKES_PLACE_IN]->(:Location)
@@ -88,7 +89,7 @@ events search --query "Find events in which Monika Borycka participated" --verbo
 (:Coordinator)-[:COORDINATES]->(:Event)
 (:Coordinator)-[:COORDINATES]->(:Project)
 (:Guest)-[:PARTICIPATES_IN]->(:Event)
-
+```
 ### Event properties:
 
 | KeyValue <id> | 4:c6515374-8168-481f-a45b-bcfd3d32f193:14 |
@@ -112,10 +113,9 @@ events search --query "Find events in which Monika Borycka participated" --verbo
 ## Battle-tested examples
 
 1. What are the music events that have more than 1 coordinator and more than 50 participants has taken place after 31.01.2021?
-2. Find events in which Monika Borycka participated alone / with other people.
+2. Find events in which Alice Jones participated alone / with other people.
 3. Find outdoor music events with more than 100 participants.
 4. Find jazz concerts with more than 50 participants that took place after 31.03.2021
-
 
 **Hybrid Search Flow (Textual Representation)**
 
@@ -128,17 +128,19 @@ events search --query "Find events in which Monika Borycka participated" --verbo
 7.  **Filter Results:** The initial results from the graph query are filtered.
 8.  **Vector Search Needed?:** A decision is made whether to perform vector search or not, based on the graph query results.
 
-    *   If **Yes:**
-        9.  **Execute Vector Search:** The vector search process begins.
-        10. **Expand Query:** The search query is expanded for better vector search.
-        11. **Vector Search:** The vector search is executed.
-        12. **Re-rank:** The vector search results are re-ranked.
-        13. **Format Vector:** The re-ranked vector search results are formatted.
-    *   If **No:**
-        9.  **Format Graph:** The graph search results are formatted.
+9. **Based on decision:**
 
-9.  **Compose Answer:** Information from the graph and/or vector search is combined to generate an answer.
-10. **Final Answer:** The composed answer is presented.
+    *   If **Yes:**
+        * **Execute Vector Search:** The vector search process begins.
+        * **Expand Query:** The search query is expanded for better vector search.
+        * **Vector Search:** The vector search is executed.
+        **Re-rank:** The vector search results are re-ranked.
+        **Format Vector:** The re-ranked vector search results are formatted.
+    *   **No:**
+        **Format Graph:** The graph search results are formatted.
+
+10.  **Compose Answer:** Information from the graph and/or vector search is combined to generate an answer.
+11. **Final Answer:** The composed answer is presented.
 
 This textual representation conveys the essential steps and branching logic of the hybrid search flow.
 
