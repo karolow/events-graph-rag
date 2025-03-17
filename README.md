@@ -1,4 +1,6 @@
-Based on https://huggingface.co/learn/cookbook/en/rag_with_knowledge_graphs_neo4j
+# Hybrid (graph/semantic) RAG tool
+
+Using natural language to explore databases unlocks new opportunities for non-technical users. This tool, built with Neo4j and LangChain, combines semantic search and graph queries to provide intuitive, code-free access to data insights.
 
 ## Launch Neo4j
 
@@ -36,8 +38,8 @@ The project provides a command-line interface for easy interaction with the syst
 ### Installation
 
 ```bash
-# Install the package (from the project root directory)
-uv pip install -e .
+uv venv --python 3.13
+uv sync
 ```
 
 ### Available Commands
@@ -134,10 +136,10 @@ events search --query "Find events in which Alice Jones participated" --verbose
         * **Execute Vector Search:** The vector search process begins.
         * **Expand Query:** The search query is expanded for better vector search.
         * **Vector Search:** The vector search is executed.
-        **Re-rank:** The vector search results are re-ranked.
-        **Format Vector:** The re-ranked vector search results are formatted.
+        * **Re-rank:** The vector search results are re-ranked.
+        * **Format Vector:** The re-ranked vector search results are formatted.
     *   **No:**
-        **Format Graph:** The graph search results are formatted.
+        * **Format Graph:** The graph search results are formatted.
 
 10.  **Compose Answer:** Information from the graph and/or vector search is combined to generate an answer.
 11. **Final Answer:** The composed answer is presented.
@@ -146,3 +148,6 @@ This textual representation conveys the essential steps and branching logic of t
 
 ## TODO: 
 - convert dates to days of week
+
+## Notes: 
+- I used this tutorial https://huggingface.co/learn/cookbook/en/rag_with_knowledge_graphs_neo4j
